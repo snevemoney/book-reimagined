@@ -1,13 +1,30 @@
-// Update this page (the content is just a fallback if you fail to update the page)
+import { useMemo } from "react";
+import HeroBanner from "@/components/library/HeroBanner";
+import CategoryRow from "@/components/library/CategoryRow";
+import { mockBooks, getBooksByCategory } from "@/data/mock-books";
 
 const Index = () => {
+  const categories = useMemo(() => getBooksByCategory(), []);
+  const heroBook = useMemo(
+    () => mockBooks.filter((b) => b.status === "ready")[0],
+    []
+  );
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <div className="text-center">
-        <h1 className="mb-4 text-4xl font-bold">Welcome to Your Blank App</h1>
-        <p className="text-xl text-muted-foreground">Start building your amazing project here!</p>
+    <main className="min-h-screen bg-background">
+      {heroBook && <HeroBanner book={heroBook} />}
+
+      <div className="-mt-24 relative z-10 space-y-2">
+        <CategoryRow title="Continue Watching" books={categories.continueWatching} />
+        <CategoryRow title="Recently Added" books={categories.recentlyAdded} />
+        {categories.processing.length > 0 && (
+          <CategoryRow title="Processing" books={categories.processing} />
+        )}
+        <CategoryRow title="Fiction" books={categories.fiction} />
+        <CategoryRow title="Non-Fiction & Science" books={categories.nonFiction} />
+        <CategoryRow title="Business & Self-Help" books={categories.business} />
       </div>
-    </div>
+    </main>
   );
 };
 
