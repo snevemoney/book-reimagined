@@ -14,7 +14,160 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      books: {
+        Row: {
+          author: string
+          backdrop_url: string | null
+          created_at: string | null
+          episode_count: number | null
+          file_name: string | null
+          file_path: string | null
+          genre: string
+          id: string
+          poster_url: string | null
+          processing_step: string | null
+          runtime_minutes: number | null
+          scene_count: number | null
+          status: string
+          synopsis: string | null
+          tags: string[] | null
+          title: string
+          updated_at: string | null
+          user_id: string | null
+        }
+        Insert: {
+          author?: string
+          backdrop_url?: string | null
+          created_at?: string | null
+          episode_count?: number | null
+          file_name?: string | null
+          file_path?: string | null
+          genre?: string
+          id?: string
+          poster_url?: string | null
+          processing_step?: string | null
+          runtime_minutes?: number | null
+          scene_count?: number | null
+          status?: string
+          synopsis?: string | null
+          tags?: string[] | null
+          title?: string
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          author?: string
+          backdrop_url?: string | null
+          created_at?: string | null
+          episode_count?: number | null
+          file_name?: string | null
+          file_path?: string | null
+          genre?: string
+          id?: string
+          poster_url?: string | null
+          processing_step?: string | null
+          runtime_minutes?: number | null
+          scene_count?: number | null
+          status?: string
+          synopsis?: string | null
+          tags?: string[] | null
+          title?: string
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
+      chapters: {
+        Row: {
+          book_id: string
+          created_at: string | null
+          end_time: number | null
+          id: string
+          order: number
+          raw_text: string | null
+          start_time: number | null
+          title: string
+          word_count: number | null
+        }
+        Insert: {
+          book_id: string
+          created_at?: string | null
+          end_time?: number | null
+          id?: string
+          order?: number
+          raw_text?: string | null
+          start_time?: number | null
+          title?: string
+          word_count?: number | null
+        }
+        Update: {
+          book_id?: string
+          created_at?: string | null
+          end_time?: number | null
+          id?: string
+          order?: number
+          raw_text?: string | null
+          start_time?: number | null
+          title?: string
+          word_count?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "chapters_book_id_fkey"
+            columns: ["book_id"]
+            isOneToOne: false
+            referencedRelation: "books"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      scenes: {
+        Row: {
+          audio_url: string | null
+          caption_text: string | null
+          chapter_id: string
+          created_at: string | null
+          duration_seconds: number | null
+          id: string
+          image_url: string | null
+          narration_text: string | null
+          order: number
+          visual_prompt: string | null
+        }
+        Insert: {
+          audio_url?: string | null
+          caption_text?: string | null
+          chapter_id: string
+          created_at?: string | null
+          duration_seconds?: number | null
+          id?: string
+          image_url?: string | null
+          narration_text?: string | null
+          order?: number
+          visual_prompt?: string | null
+        }
+        Update: {
+          audio_url?: string | null
+          caption_text?: string | null
+          chapter_id?: string
+          created_at?: string | null
+          duration_seconds?: number | null
+          id?: string
+          image_url?: string | null
+          narration_text?: string | null
+          order?: number
+          visual_prompt?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scenes_chapter_id_fkey"
+            columns: ["chapter_id"]
+            isOneToOne: false
+            referencedRelation: "chapters"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never

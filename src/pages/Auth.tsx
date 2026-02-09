@@ -1,17 +1,41 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { motion } from "framer-motion";
+import { useAuth } from "@/contexts/AuthContext";
+import { useToast } from "@/hooks/use-toast";
 
 const Auth = () => {
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const { signIn, signUp } = useAuth();
+  const navigate = useNavigate();
+  const { toast } = useToast();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // TODO: integrate with Supabase Auth
+    setLoading(true);
+
+    if (isSignUp) {
+      const { error } = await signUp(email, password);
+      if (error) {
+        toast({ title: "Sign up failed", description: error.message, variant: "destructive" });
+      } else {
+        toast({ title: "Check your email", description: "We sent you a confirmation link." });
+      }
+    } else {
+      const { error } = await signIn(email, password);
+      if (error) {
+        toast({ title: "Sign in failed", description: error.message, variant: "destructive" });
+      } else {
+        navigate("/");
+      }
+    }
+    setLoading(false);
   };
 
   return (
@@ -53,10 +77,11 @@ const Auth = () => {
                 placeholder="••••••••"
                 className="bg-secondary border-muted"
                 required
+                minLength={6}
               />
             </div>
-            <Button type="submit" className="w-full" size="lg">
-              {isSignUp ? "Create Account" : "Sign In"}
+            <Button type="submit" className="w-full" size="lg" disabled={loading}>
+              {loading ? "Please wait…" : isSignUp ? "Create Account" : "Sign In"}
             </Button>
           </form>
 

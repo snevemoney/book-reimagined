@@ -1,12 +1,14 @@
 import { Link, useLocation } from "react-router-dom";
-import { Search, Upload, User } from "lucide-react";
+import { Search, Upload, User, LogOut } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useAuth } from "@/contexts/AuthContext";
 
 const Navbar = () => {
   const location = useLocation();
   const [searchOpen, setSearchOpen] = useState(false);
+  const { user, signOut } = useAuth();
 
   const isPlayer = location.pathname.startsWith("/watch/");
   if (isPlayer) return null;
@@ -53,11 +55,21 @@ const Navbar = () => {
           </Button>
         </Link>
 
-        <Link to="/auth">
-          <button className="p-2 text-foreground/70 hover:text-foreground transition-colors">
-            <User className="w-5 h-5" />
+        {user ? (
+          <button
+            onClick={() => signOut()}
+            className="p-2 text-foreground/70 hover:text-foreground transition-colors"
+            title="Sign Out"
+          >
+            <LogOut className="w-5 h-5" />
           </button>
-        </Link>
+        ) : (
+          <Link to="/auth">
+            <button className="p-2 text-foreground/70 hover:text-foreground transition-colors">
+              <User className="w-5 h-5" />
+            </button>
+          </Link>
+        )}
       </div>
     </nav>
   );
