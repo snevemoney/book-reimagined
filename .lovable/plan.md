@@ -1,79 +1,134 @@
 
 
-# Bookflix — Netflix for Books
+# Database, Storage, and Book Parser Pipeline
 
-## Overview
-A web app that converts uploaded books into watchable "book movies" with narration, visuals, and captions — all served in a Netflix-style library. No user settings; an AI "Director" handles all creative decisions automatically.
+## What This Does
+Sets up the complete backend foundation for Bookflix: database tables to track books/chapters/scenes, a file storage bucket for uploads, working authentication, and a backend function that parses uploaded book files to extract text and detect chapters.
 
-## Pages & Experience
+## What You'll See After This
+- Sign up / sign in actually works
+- Uploading a book saves the file to storage and creates a "Processing" entry in your library
+- The parser function extracts text and chapters from your book automatically
+- The library page shows real books from the database instead of mock data
 
-### 1. Home / Library (Netflix UI)
-- Hero banner featuring a random completed book with auto-playing trailer (muted)
-- Rows: "Continue Watching", "Recently Added", "Fiction", "Non-Fiction", "Business", etc.
-- Each title shows: AI-generated poster, title, runtime, genre tags
-- Hover/tap shows a 30-second trailer preview
-- Search bar to find titles
-- "Upload a Book" CTA prominently placed
+---
 
-### 2. Title Detail Page
-- Large backdrop image + synopsis (AI-generated)
-- Play button, episode list (if book was split)
-- Chapter timeline with markers
-- Runtime, genre tags, "More Like This" recommendations
-- Progress indicator if partially watched
+## Steps
 
-### 3. Upload Page
-- Drag-and-drop file upload (PDF, EPUB, DOCX, TXT)
-- Mandatory "I have rights to upload this" checkbox
-- After upload: redirects to library where the title appears with a "Processing" state
-- Progress updates: "Analyzing book…", "Generating scenes…", "Creating narration…"
+### 1. Database Schema (Migration)
+Create three core tables plus an enum:
 
-### 4. Player (Full-Screen Viewer)
-- Custom web-based scene player (not a video file)
-- Displays AI-generated images with Ken Burns pan/zoom animation
-- Synchronized narration audio (ElevenLabs TTS)
-- Always-on captions/subtitles
-- Chapter title cards between sections
-- Play/pause, chapter skip, progress scrubber
-- Hook intro (first 30s), midpoint recap, end synthesis
+- **books** -- one row per uploaded book. Tracks title (initially from filename), author, genre, status (processing/ready/error), poster/backdrop URLs, runtime, episode count, synopsis, tags, and a reference to the uploaded file path. Has a nullable `user_id` so we know who uploaded it.
+- **chapters** -- linked to a book. Stores chapter title, order, raw text content, and timing info (start_time/end_time populated later by the render pipeline).
+- **scenes** -- linked to a chapter. Stores narration text, visual prompt, image/audio URLs, duration, caption text, and order.
 
-### 5. Auth
-- Browse library freely without account
-- Sign up required to upload books and save watch progress
-- Email-based authentication
+RLS policies:
+- Books: anyone can SELECT (public library). Only authenticated users can INSERT. Only the uploader can UPDATE/DELETE their own books.
+- Chapters and scenes: anyone can SELECT. INSERT/UPDATE/DELETE restricted to the book's owner (checked via the parent book's user_id).
 
-## The "Director" — Automatic Creative Engine
+### 2. Storage Bucket
+Create a `book-uploads` public bucket for storing uploaded book files (PDF/EPUB/DOCX/TXT). RLS policy allows authenticated users to upload, and anyone to read (so the parser function can access files).
 
-When a book is uploaded, the AI Director runs a fully automatic pipeline:
+### 3. Authentication
+Wire up the Auth page to actually call the authentication system for sign up and sign in. Create an auth context/provider so the session is available app-wide. Protect the Upload page so only signed-in users can upload.
 
-1. **Parse** — Extract text, detect chapters via TOC or heading heuristics
-2. **Analyze** — Classify genre, tone, complexity; generate synopsis and tags
-3. **Plan** — Create scene timeline: narration text, visual prompts, durations, chapter markers
-4. **Compute runtime** — 12–90 minutes based on book length/density; split into episodes if needed
-5. **Generate assets** — Per scene: TTS audio (ElevenLabs), AI image (Gemini), caption text
-6. **Generate poster + trailer** — Poster image + 30-60s preview from hook scenes
-7. **Publish** — Mark as ready in library
+### 4. Edge Function: `parse-book`
+A backend function that:
+- Receives a `book_id`
+- Downloads the uploaded file from storage
+- Detects file type by extension
+- Extracts raw text:
+  - **TXT**: read directly
+  - **PDF**: extract text using pdf-parse (basic text-layer extraction)
+  - **DOCX**: extract text by unzipping and parsing the XML
+  - **EPUB**: extract text by unzipping and parsing XHTML content files
+- Detects chapter boundaries using heuristics:
+  - Look for "Chapter N", "CHAPTER N", "Part N" patterns
+  - Look for lines that are all-caps or very short followed by body text
+  - Fall back to splitting by a fixed word count if no chapters detected
+- Saves chapters to the database
+- Updates the book's status and title (if extractable from the content)
 
-All creative decisions (narration tone, visual style, pacing) are made by the Director based on genre:
-- Fiction → cinematic illustrated frames, storyteller narration
-- Non-fiction → infographic style, documentary narration
-- Business → clean visuals, professional tone
+### 5. Upload Page -- Real Integration
+Update the Upload page to:
+1. Require sign-in (redirect to auth if not logged in)
+2. Upload the file to the `book-uploads` storage bucket
+3. Insert a new row in `books` with status "processing"
+4. Call the `parse-book` backend function with the new book ID
+5. Navigate to library
 
-## Content Guardrails
-- Transformative narration only (summary + commentary, not verbatim reading)
-- Minimal direct quotes
-- Rights checkbox required
-- Report button on every title
+### 6. Library -- Real Data
+Replace mock data with real database queries on the Index page. Show books from the database grouped by genre/status. Keep mock data as fallback only if the database is empty.
 
-## Backend (Lovable Cloud + Supabase)
-- **Database**: Books, chapters, scenes, user watch progress, library metadata
-- **Storage**: Uploaded book files, generated images, generated audio clips
-- **Edge Functions**: Book parsing, AI Director pipeline (genre detection, scene planning, image generation), ElevenLabs TTS
-- **Auth**: Email signup for upload and progress tracking
+---
 
-## Technical Approach
-- Scene-by-scene asset generation (not one giant call)
-- Web-based player assembles scenes in real-time (no video file rendering needed)
-- Processing happens via chained edge function calls with progress tracking
-- Consistency maintained via character/concept glossary per book
+## Technical Details
+
+### Database SQL
+
+```sql
+-- Books table
+CREATE TABLE public.books (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  title TEXT NOT NULL DEFAULT 'Untitled',
+  author TEXT NOT NULL DEFAULT 'Unknown',
+  genre TEXT NOT NULL DEFAULT 'fiction',
+  tags TEXT[] DEFAULT '{}',
+  synopsis TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'processing',
+  poster_url TEXT DEFAULT '',
+  backdrop_url TEXT DEFAULT '',
+  runtime_minutes INTEGER DEFAULT 0,
+  episode_count INTEGER DEFAULT 0,
+  scene_count INTEGER DEFAULT 0,
+  file_path TEXT,
+  file_name TEXT,
+  processing_step TEXT DEFAULT 'uploaded',
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Chapters table
+CREATE TABLE public.chapters (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  book_id UUID REFERENCES public.books(id) ON DELETE CASCADE NOT NULL,
+  title TEXT NOT NULL DEFAULT 'Untitled Chapter',
+  "order" INTEGER NOT NULL DEFAULT 0,
+  raw_text TEXT DEFAULT '',
+  word_count INTEGER DEFAULT 0,
+  start_time REAL DEFAULT 0,
+  end_time REAL DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Scenes table
+CREATE TABLE public.scenes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  chapter_id UUID REFERENCES public.chapters(id) ON DELETE CASCADE NOT NULL,
+  "order" INTEGER NOT NULL DEFAULT 0,
+  narration_text TEXT DEFAULT '',
+  caption_text TEXT DEFAULT '',
+  visual_prompt TEXT DEFAULT '',
+  image_url TEXT DEFAULT '',
+  audio_url TEXT DEFAULT '',
+  duration_seconds REAL DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+```
+
+### Edge Function: `parse-book/index.ts`
+- Uses `createClient` with the service role key to bypass RLS
+- Downloads the file from `book-uploads` bucket
+- For TXT: `new TextDecoder().decode(data)`
+- For PDF: uses a lightweight text extraction approach (regex on the raw PDF stream for text objects)
+- For DOCX: uses JSZip to read `word/document.xml` and strip XML tags
+- For EPUB: uses JSZip to read content files listed in `container.xml` and `content.opf`
+- Chapter detection via regex patterns, then inserts rows into `chapters` table
+- Updates `books.status` to `'parsed'` and `books.processing_step` to `'parsed'`
+
+### Auth Context
+- `src/contexts/AuthContext.tsx` -- provides `user`, `session`, `signIn`, `signUp`, `signOut`
+- Wraps the app in `App.tsx`
+- Upload page checks for auth and redirects if needed
 
