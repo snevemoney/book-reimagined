@@ -1,1 +1,4 @@
 project_id = "breupfqscihhnfalprro"
+
+[functions.parse-book]
+verify_jwt = false

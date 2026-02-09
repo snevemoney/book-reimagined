@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Upload as UploadIcon, FileText, CheckCircle2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -6,13 +6,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { motion } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
+import { supabase } from "@/integrations/supabase/client";
 
-const ACCEPTED_TYPES = [
-  "application/pdf",
-  "application/epub+zip",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "text/plain",
-];
 const ACCEPTED_EXT = [".pdf", ".epub", ".docx", ".txt"];
 
 const Upload = () => {
@@ -20,8 +16,14 @@ const Upload = () => {
   const [dragActive, setDragActive] = useState(false);
   const [hasRights, setHasRights] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState("");
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { user, loading: authLoading } = useAuth();
+
+  useEffect(() => {
+    if (!authLoading && !user) navigate("/auth");
+  }, [authLoading, user, navigate]);
 
   const handleFile = useCallback((f: File) => {
     const ext = "." + f.name.split(".").pop()?.toLowerCase();
@@ -39,12 +41,57 @@ const Upload = () => {
   }, [handleFile]);
 
   const handleSubmit = async () => {
-    if (!file || !hasRights) return;
+    if (!file || !hasRights || !user) return;
     setUploading(true);
-    // TODO: actual upload to Supabase storage + trigger pipeline
-    await new Promise((r) => setTimeout(r, 1500));
-    toast({ title: "Book uploaded!", description: "Your book is now being processed. Check the library for progress." });
-    navigate("/");
+
+    try {
+      // 1. Upload file to storage
+      setProgress("Uploading file…");
+      const filePath = `${user.id}/${Date.now()}-${file.name}`;
+      const { error: uploadErr } = await supabase.storage
+        .from("book-uploads")
+        .upload(filePath, file);
+
+      if (uploadErr) throw uploadErr;
+
+      // 2. Insert book record
+      setProgress("Creating book entry…");
+      const titleFromName = file.name.replace(/\.[^.]+$/, "").replace(/[-_]/g, " ");
+      const { data: book, error: insertErr } = await supabase
+        .from("books")
+        .insert({
+          user_id: user.id,
+          title: titleFromName,
+          file_path: filePath,
+          file_name: file.name,
+          status: "processing",
+          processing_step: "uploaded",
+        })
+        .select("id")
+        .single();
+
+      if (insertErr || !book) throw insertErr || new Error("Failed to create book");
+
+      // 3. Trigger parse function
+      setProgress("Starting parser…");
+      const { error: fnErr } = await supabase.functions.invoke("parse-book", {
+        body: { book_id: book.id },
+      });
+
+      if (fnErr) {
+        console.error("Parse function error:", fnErr);
+        // Don't block — parsing runs async, book is already created
+      }
+
+      toast({ title: "Book uploaded!", description: "Your book is being processed. Check the library for progress." });
+      navigate("/");
+    } catch (err: any) {
+      console.error(err);
+      toast({ title: "Upload failed", description: err.message || "Something went wrong", variant: "destructive" });
+    } finally {
+      setUploading(false);
+      setProgress("");
+    }
   };
 
   return (
@@ -119,7 +166,7 @@ const Upload = () => {
             size="lg"
           >
             {uploading ? (
-              <>Processing…</>
+              <>{progress || "Processing…"}</>
             ) : (
               <>
                 <CheckCircle2 className="w-5 h-5" />
