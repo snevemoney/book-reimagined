@@ -328,6 +328,22 @@ Deno.serve(async (req) => {
       scene_count: chapters.length,
     }).eq("id", book_id);
 
+    // Auto-trigger analyze-book
+    try {
+      const analyzeUrl = `${supabaseUrl}/functions/v1/analyze-book`;
+      fetch(analyzeUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${serviceKey}`,
+        },
+        body: JSON.stringify({ book_id }),
+      }).catch((e) => console.error("Failed to trigger analyze-book:", e));
+      console.log("Triggered analyze-book for", book_id);
+    } catch (e) {
+      console.error("Error triggering analyze-book:", e);
+    }
+
     return new Response(
       JSON.stringify({
         success: true,
