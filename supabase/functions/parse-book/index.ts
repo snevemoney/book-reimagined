@@ -119,8 +119,8 @@ function extractTextFromPdf(data: Uint8Array): string {
 
 async function extractTextFromDocx(data: Uint8Array): Promise<string> {
   // DOCX is a ZIP containing word/document.xml
-  const { JSZip } = await import("https://esm.sh/jszip@3.10.1");
-  const zip = await JSZip.loadAsync(data);
+  const JSZip = (await import("https://esm.sh/jszip@3.10.1")).default;
+  const zip = await new JSZip().loadAsync(data);
   const docXml = await zip.file("word/document.xml")?.async("string");
   if (!docXml) return "Could not find document.xml in DOCX file.";
   
@@ -142,8 +142,8 @@ async function extractTextFromDocx(data: Uint8Array): Promise<string> {
 }
 
 async function extractTextFromEpub(data: Uint8Array): Promise<string> {
-  const { JSZip } = await import("https://esm.sh/jszip@3.10.1");
-  const zip = await JSZip.loadAsync(data);
+  const JSZip = (await import("https://esm.sh/jszip@3.10.1")).default;
+  const zip = await new JSZip().loadAsync(data);
 
   // Read container.xml to find content.opf
   const containerXml = await zip.file("META-INF/container.xml")?.async("string");
@@ -157,29 +157,47 @@ async function extractTextFromEpub(data: Uint8Array): Promise<string> {
   const opfContent = await zip.file(opfPath)?.async("string");
   if (!opfContent) return "Invalid EPUB: missing content.opf";
 
-  // Extract manifest items that are xhtml/html
-  const itemRegex = /<item[^>]+id="([^"]+)"[^>]+href="([^"]+)"[^>]+media-type="([^"]+)"[^>]*\/>/g;
+  // Extract manifest items - flexible attribute order
+  const itemRegex = /<item\s[^>]*?>/gi;
   const manifest: Record<string, { href: string; type: string }> = {};
   let itemMatch;
   while ((itemMatch = itemRegex.exec(opfContent)) !== null) {
-    manifest[itemMatch[1]] = { href: itemMatch[2], type: itemMatch[3] };
+    const tag = itemMatch[0];
+    const idMatch = tag.match(/id="([^"]+)"/);
+    const hrefMatch = tag.match(/href="([^"]+)"/);
+    const typeMatch = tag.match(/media-type="([^"]+)"/);
+    if (idMatch && hrefMatch && typeMatch) {
+      manifest[idMatch[1]] = { href: hrefMatch[1], type: typeMatch[1] };
+    }
   }
 
   // Extract spine order
-  const spineRegex = /<itemref[^>]+idref="([^"]+)"[^>]*\/>/g;
+  const spineRegex = /<itemref\s[^>]*?idref="([^"]+)"[^>]*?>/gi;
   const spineOrder: string[] = [];
   let spineMatch;
   while ((spineMatch = spineRegex.exec(opfContent)) !== null) {
     spineOrder.push(spineMatch[1]);
   }
 
+  // If spine is empty, try all html items from manifest
+  const idsToProcess = spineOrder.length > 0 ? spineOrder : Object.keys(manifest);
+
   const textParts: string[] = [];
-  for (const id of spineOrder) {
+  for (const id of idsToProcess) {
     const item = manifest[id];
     if (!item || !item.type.includes("html")) continue;
-    const filePath = opfDir + item.href;
-    const html = await zip.file(filePath)?.async("string");
+    // Decode href (some EPUBs URL-encode paths)
+    const decodedHref = decodeURIComponent(item.href);
+    const filePath = opfDir + decodedHref;
+    
+    // Try exact path first, then search for it
+    let html = await zip.file(filePath)?.async("string");
+    if (!html) {
+      // Try without opfDir prefix
+      html = await zip.file(decodedHref)?.async("string");
+    }
     if (!html) continue;
+    
     const text = html
       .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
@@ -189,12 +207,15 @@ async function extractTextFromEpub(data: Uint8Array): Promise<string> {
       .replace(/&amp;/g, "&")
       .replace(/&lt;/g, "<")
       .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&#(\d+);/g, (_m, code) => String.fromCharCode(parseInt(code)))
       .replace(/\n{3,}/g, "\n\n")
       .trim();
     if (text) textParts.push(text);
   }
 
-  return textParts.join("\n\n");
+  return textParts.join("\n\n") || "Could not extract text from this EPUB.";
 }
 
 Deno.serve(async (req) => {
