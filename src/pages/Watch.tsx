@@ -1,20 +1,48 @@
 import { useParams, Link } from "react-router-dom";
-import { ArrowLeft, Play, Pause, SkipForward, SkipBack, Volume2 } from "lucide-react";
+import { ArrowLeft, Play, Pause, SkipForward, SkipBack, Volume2, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { mockBooks } from "@/data/mock-books";
+import { supabase } from "@/integrations/supabase/client";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { motion, AnimatePresence } from "framer-motion";
+import type { Book } from "@/types/book";
 
 const Watch = () => {
   const { id } = useParams();
-  const book = mockBooks.find((b) => b.id === id);
+  const { data: book, isLoading } = useQuery({
+    queryKey: ["book", id],
+    queryFn: async () => {
+      const { data } = await supabase.from("books").select("*").eq("id", id!).maybeSingle();
+      if (data) {
+        return {
+          id: data.id, title: data.title, author: data.author,
+          genre: data.genre as Book["genre"], tags: data.tags || [],
+          synopsis: data.synopsis || "", status: data.status as Book["status"],
+          poster_url: data.poster_url || "", backdrop_url: data.backdrop_url || "",
+          runtime_minutes: data.runtime_minutes || 0, episode_count: data.episode_count || 0,
+          scene_count: data.scene_count || 0, created_at: data.created_at || "",
+        } as Book;
+      }
+      return mockBooks.find((b) => b.id === id) || null;
+    },
+    enabled: !!id,
+  });
   const [isPlaying, setIsPlaying] = useState(false);
   const [showControls, setShowControls] = useState(true);
   const [progress, setProgress] = useState(0);
   const [currentScene] = useState(0);
 
-  if (!book || book.status !== "ready") {
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-primary animate-spin" />
+      </div>
+    );
+  }
+
+  if (!book) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <p className="text-muted-foreground">This title is not available yet.</p>
