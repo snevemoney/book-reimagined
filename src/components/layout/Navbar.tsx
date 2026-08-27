@@ -4,11 +4,14 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/contexts/AuthContext";
+import { useToast } from "@/hooks/use-toast";
 
 const Navbar = () => {
   const location = useLocation();
   const [searchOpen, setSearchOpen] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const { user, signOut } = useAuth();
+  const { toast } = useToast();
 
   const isPlayer = location.pathname.startsWith("/watch/");
   if (isPlayer) return null;
@@ -57,8 +60,17 @@ const Navbar = () => {
 
         {user ? (
           <button
-            onClick={() => signOut()}
-            className="p-2 text-foreground/70 hover:text-foreground transition-colors"
+            onClick={async () => {
+              if (signingOut) return;
+              setSigningOut(true);
+              const { error } = await signOut();
+              setSigningOut(false);
+              if (error) {
+                toast({ title: "Sign out failed", description: error.message, variant: "destructive" });
+              }
+            }}
+            disabled={signingOut}
+            className="p-2 text-foreground/70 hover:text-foreground transition-colors disabled:opacity-50"
             title="Sign Out"
           >
             <LogOut className="w-5 h-5" />

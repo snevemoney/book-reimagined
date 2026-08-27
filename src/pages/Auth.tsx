@@ -18,24 +18,32 @@ const Auth = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const trimmedEmail = email.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      toast({ title: "Invalid email", description: "Enter a valid email address.", variant: "destructive" });
+      return;
+    }
     setLoading(true);
 
-    if (isSignUp) {
-      const { error } = await signUp(email, password);
-      if (error) {
-        toast({ title: "Sign up failed", description: error.message, variant: "destructive" });
+    try {
+      if (isSignUp) {
+        const { error } = await signUp(trimmedEmail, password);
+        if (error) {
+          toast({ title: "Sign up failed", description: error.message, variant: "destructive" });
+        } else {
+          toast({ title: "Check your email", description: "We sent you a confirmation link." });
+        }
       } else {
-        toast({ title: "Check your email", description: "We sent you a confirmation link." });
+        const { error } = await signIn(trimmedEmail, password);
+        if (error) {
+          toast({ title: "Sign in failed", description: error.message, variant: "destructive" });
+        } else {
+          navigate("/");
+        }
       }
-    } else {
-      const { error } = await signIn(email, password);
-      if (error) {
-        toast({ title: "Sign in failed", description: error.message, variant: "destructive" });
-      } else {
-        navigate("/");
-      }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (

@@ -1,35 +1,24 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Loader2 } from "lucide-react";
 import HeroBanner from "@/components/library/HeroBanner";
 import CategoryRow from "@/components/library/CategoryRow";
+import { Button } from "@/components/ui/button";
 import { mockBooks, getBooksByCategory } from "@/data/mock-books";
 import { supabase } from "@/integrations/supabase/client";
-import type { Book } from "@/types/book";
+import { LIBRARY_PAGE_SIZE, mapBookRow } from "@/lib/map-book";
 
 const Index = () => {
-  const { data: dbBooks } = useQuery({
-    queryKey: ["books"],
+  const { data: dbBooks, isLoading, isError, error, refetch } = useQuery({
+    queryKey: ["books", LIBRARY_PAGE_SIZE],
     queryFn: async () => {
-      const { data, error } = await supabase
+      const { data, error: queryError } = await supabase
         .from("books")
-        .select("*")
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      return (data || []).map((b: any): Book => ({
-        id: b.id,
-        title: b.title,
-        author: b.author,
-        genre: b.genre as Book["genre"],
-        tags: b.tags || [],
-        synopsis: b.synopsis || "",
-        status: b.status as Book["status"],
-        poster_url: b.poster_url || "",
-        backdrop_url: b.backdrop_url || "",
-        runtime_minutes: b.runtime_minutes || 0,
-        episode_count: b.episode_count || 0,
-        scene_count: b.scene_count || 0,
-        created_at: b.created_at,
-      }));
+        .select("id,title,author,genre,tags,synopsis,status,poster_url,backdrop_url,runtime_minutes,episode_count,scene_count,created_at")
+        .order("created_at", { ascending: false })
+        .limit(LIBRARY_PAGE_SIZE);
+      if (queryError) throw queryError;
+      return (data || []).map(mapBookRow);
     },
   });
 
@@ -40,7 +29,7 @@ const Index = () => {
 
   const categories = useMemo(() => {
     if (dbBooks && dbBooks.length > 0) {
-      const processing = allBooks.filter((b) => b.status === "processing" || b.status === ("parsed" as any));
+      const processing = allBooks.filter((b) => b.status === "processing" || b.status === "parsed");
       const ready = allBooks.filter((b) => b.status === "ready");
       const fiction = allBooks.filter((b) => ["fiction", "fantasy", "mystery", "romance"].includes(b.genre));
       const nonFiction = allBooks.filter((b) => ["non-fiction", "science", "history", "biography"].includes(b.genre));
@@ -54,6 +43,28 @@ const Index = () => {
     () => allBooks.find((b) => b.status === "ready") || allBooks[0],
     [allBooks]
   );
+
+  if (isLoading) {
+    return (
+      <main className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-primary animate-spin" />
+      </main>
+    );
+  }
+
+  if (isError) {
+    return (
+      <main className="min-h-screen bg-background flex items-center justify-center px-6">
+        <div className="text-center space-y-3">
+          <p className="text-foreground">Could not load the library.</p>
+          <p className="text-sm text-muted-foreground">
+            {error instanceof Error ? error.message : "Please try again."}
+          </p>
+          <Button onClick={() => refetch()}>Try again</Button>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-background">

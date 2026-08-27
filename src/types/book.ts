@@ -1,4 +1,4 @@
-export type BookStatus = "processing" | "ready" | "error";
+export type BookStatus = "processing" | "parsed" | "ready" | "error";
 export type BookGenre = "fiction" | "non-fiction" | "business" | "history" | "science" | "self-help" | "fantasy" | "mystery" | "romance" | "biography";
 
 export interface Book {

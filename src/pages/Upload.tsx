@@ -8,8 +8,8 @@ import { motion } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
-
-const ACCEPTED_EXT = [".pdf", ".epub", ".docx", ".txt"];
+import { isTransientError, withRetry } from "@/lib/retry";
+import { ACCEPTED_EXT, isAcceptedBookFile, sanitizeFileName } from "@/lib/upload";
 
 const Upload = () => {
   const [file, setFile] = useState<File | null>(null);
@@ -26,9 +26,9 @@ const Upload = () => {
   }, [authLoading, user, navigate]);
 
   const handleFile = useCallback((f: File) => {
-    const ext = "." + f.name.split(".").pop()?.toLowerCase();
-    if (!ACCEPTED_EXT.includes(ext)) {
-      toast({ title: "Unsupported format", description: "Please upload PDF, EPUB, DOCX, or TXT files.", variant: "destructive" });
+    const check = isAcceptedBookFile(f);
+    if (!check.ok) {
+      toast({ title: "Unsupported file", description: check.reason, variant: "destructive" });
       return;
     }
     setFile(f);
@@ -45,25 +45,25 @@ const Upload = () => {
     setUploading(true);
 
     try {
-      // 1. Upload file to storage
       setProgress("Uploading file…");
-      const filePath = `${user.id}/${Date.now()}-${file.name}`;
-      const { error: uploadErr } = await supabase.storage
-        .from("book-uploads")
-        .upload(filePath, file);
+      const safeName = sanitizeFileName(file.name);
+      const filePath = `${user.id}/${Date.now()}-${safeName}`;
+      await withRetry(async () => {
+        const { error: uploadErr } = await supabase.storage
+          .from("book-uploads")
+          .upload(filePath, file);
+        if (uploadErr) throw uploadErr;
+      }, { retryOn: isTransientError });
 
-      if (uploadErr) throw uploadErr;
-
-      // 2. Insert book record
       setProgress("Creating book entry…");
-      const titleFromName = file.name.replace(/\.[^.]+$/, "").replace(/[-_]/g, " ");
+      const titleFromName = safeName.replace(/\.[^.]+$/, "").replace(/[-_]/g, " ");
       const { data: book, error: insertErr } = await supabase
         .from("books")
         .insert({
           user_id: user.id,
           title: titleFromName,
           file_path: filePath,
-          file_name: file.name,
+          file_name: safeName,
           status: "processing",
           processing_step: "uploaded",
         })
@@ -72,22 +72,25 @@ const Upload = () => {
 
       if (insertErr || !book) throw insertErr || new Error("Failed to create book");
 
-      // 3. Trigger parse function
       setProgress("Starting parser…");
-      const { error: fnErr } = await supabase.functions.invoke("parse-book", {
-        body: { book_id: book.id },
-      });
+      const { error: fnErr, data: fnData } = await withRetry(async () => {
+        const result = await supabase.functions.invoke("parse-book", {
+          body: { book_id: book.id },
+        });
+        if (result.error) throw result.error;
+        return result;
+      }, { retryOn: isTransientError });
 
-      if (fnErr) {
-        console.error("Parse function error:", fnErr);
-        // Don't block — parsing runs async, book is already created
+      if (fnErr || (fnData && typeof fnData === "object" && "error" in fnData && fnData.error)) {
+        throw fnErr || new Error(String((fnData as { error?: string }).error) || "Parser failed");
       }
 
       toast({ title: "Book uploaded!", description: "Your book is being processed. Check the library for progress." });
       navigate("/");
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      toast({ title: "Upload failed", description: err.message || "Something went wrong", variant: "destructive" });
+      const message = err instanceof Error ? err.message : "Something went wrong";
+      toast({ title: "Upload failed", description: message, variant: "destructive" });
     } finally {
       setUploading(false);
       setProgress("");

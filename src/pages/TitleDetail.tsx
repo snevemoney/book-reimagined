@@ -5,40 +5,28 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { mockBooks } from "@/data/mock-books";
 import { supabase } from "@/integrations/supabase/client";
+import { isUuid } from "@/lib/ids";
+import { mapBookRow } from "@/lib/map-book";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import type { Book } from "@/types/book";
 
 const TitleDetail = () => {
   const { id } = useParams();
 
-  const { data: book, isLoading } = useQuery({
+  const { data: book, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["book", id],
     queryFn: async () => {
-      // Try database first
-      const { data, error } = await supabase
-        .from("books")
-        .select("*")
-        .eq("id", id!)
-        .maybeSingle();
-      if (data) {
-        return {
-          id: data.id,
-          title: data.title,
-          author: data.author,
-          genre: data.genre as Book["genre"],
-          tags: data.tags || [],
-          synopsis: data.synopsis || "",
-          status: data.status as Book["status"],
-          poster_url: data.poster_url || "",
-          backdrop_url: data.backdrop_url || "",
-          runtime_minutes: data.runtime_minutes || 0,
-          episode_count: data.episode_count || 0,
-          scene_count: data.scene_count || 0,
-          created_at: data.created_at || "",
-        } as Book;
+      if (!id) return null;
+      if (!isUuid(id)) {
+        return mockBooks.find((b) => b.id === id) || null;
       }
-      // Fallback to mock
+      const { data, error: queryError } = await supabase
+        .from("books")
+        .select("id,title,author,genre,tags,synopsis,status,poster_url,backdrop_url,runtime_minutes,episode_count,scene_count,created_at")
+        .eq("id", id)
+        .maybeSingle();
+      if (queryError) throw queryError;
+      if (data) return mapBookRow(data);
       return mockBooks.find((b) => b.id === id) || null;
     },
     enabled: !!id,
@@ -48,6 +36,20 @@ const TitleDetail = () => {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <Loader2 className="w-8 h-8 text-primary animate-spin" />
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center px-6">
+        <div className="text-center space-y-3">
+          <p className="text-foreground">Could not load this title.</p>
+          <p className="text-sm text-muted-foreground">
+            {error instanceof Error ? error.message : "Please try again."}
+          </p>
+          <Button onClick={() => refetch()}>Try again</Button>
+        </div>
       </div>
     );
   }
