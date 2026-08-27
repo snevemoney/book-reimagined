@@ -16,7 +16,7 @@ Sets up the complete backend foundation for Bookflix: database tables to track b
 ## Steps
 
 ### 1. Database Schema (Migration)
-Create three core tables plus an enum:
+Create three core tables (status is stored as text, not a Postgres enum):
 
 - **books** -- one row per uploaded book. Tracks title (initially from filename), author, genre, status (processing/ready/error), poster/backdrop URLs, runtime, episode count, synopsis, tags, and a reference to the uploaded file path. Has a nullable `user_id` so we know who uploaded it.
 - **chapters** -- linked to a book. Stores chapter title, order, raw text content, and timing info (start_time/end_time populated later by the render pipeline).
@@ -39,7 +39,7 @@ A backend function that:
 - Detects file type by extension
 - Extracts raw text:
   - **TXT**: read directly
-  - **PDF**: extract text using pdf-parse (basic text-layer extraction)
+  - **PDF**: extract text with a lightweight regex pass over PDF text operators (not pdf-parse)
   - **DOCX**: extract text by unzipping and parsing the XML
   - **EPUB**: extract text by unzipping and parsing XHTML content files
 - Detects chapter boundaries using heuristics:

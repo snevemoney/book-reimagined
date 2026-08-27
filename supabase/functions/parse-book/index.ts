@@ -1,9 +1,9 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import JSZip from "https://esm.sh/jszip@3.10.1";
+import { assertBookOwner, authenticateCaller, bearerToken, createServiceClient } from "../_shared/auth.ts";
+import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
+import { isUuid } from "../_shared/ids.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+const MAX_RAW_TEXT_CHARS = 500_000;
 
 interface ChapterData {
   title: string;
@@ -69,6 +69,17 @@ function detectChapters(text: string): ChapterData[] {
   return chapters;
 }
 
+function decodeXmlEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_m, code) => String.fromCharCode(parseInt(code, 10)));
+}
+
 function extractTextFromTxt(data: Uint8Array): string {
   return new TextDecoder().decode(data);
 }
@@ -119,22 +130,18 @@ function extractTextFromPdf(data: Uint8Array): string {
 
 async function extractTextFromDocx(data: Uint8Array): Promise<string> {
   // DOCX is a ZIP containing word/document.xml
-  const JSZip = (await import("https://esm.sh/jszip@3.10.1")).default;
   const zip = await new JSZip().loadAsync(data);
   const docXml = await zip.file("word/document.xml")?.async("string");
   if (!docXml) return "Could not find document.xml in DOCX file.";
   
   // Strip XML tags, keep text content
-  const text = docXml
-    .replace(/<w:p[^>]*\/>/g, "\n")
-    .replace(/<\/w:p>/g, "\n")
-    .replace(/<w:tab\/>/g, "\t")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
+  const text = decodeXmlEntities(
+    docXml
+      .replace(/<w:p[^>]*\/>/g, "\n")
+      .replace(/<\/w:p>/g, "\n")
+      .replace(/<w:tab\/>/g, "\t")
+      .replace(/<[^>]+>/g, ""),
+  )
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
@@ -142,7 +149,6 @@ async function extractTextFromDocx(data: Uint8Array): Promise<string> {
 }
 
 async function extractTextFromEpub(data: Uint8Array): Promise<string> {
-  const JSZip = (await import("https://esm.sh/jszip@3.10.1")).default;
   const zip = await new JSZip().loadAsync(data);
 
   // Read container.xml to find content.opf
@@ -198,18 +204,13 @@ async function extractTextFromEpub(data: Uint8Array): Promise<string> {
     }
     if (!html) continue;
     
-    const text = html
-      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-      .replace(/<\/?(p|div|br|h[1-6]|li|blockquote)[^>]*>/gi, "\n")
-      .replace(/<[^>]+>/g, "")
-      .replace(/&nbsp;/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&quot;/g, '"')
-      .replace(/&apos;/g, "'")
-      .replace(/&#(\d+);/g, (_m, code) => String.fromCharCode(parseInt(code)))
+    const text = decodeXmlEntities(
+      html
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+        .replace(/<\/?(p|div|br|h[1-6]|li|blockquote)[^>]*>/gi, "\n")
+        .replace(/<[^>]+>/g, ""),
+    )
       .replace(/\n{3,}/g, "\n\n")
       .trim();
     if (text) textParts.push(text);
@@ -225,16 +226,15 @@ Deno.serve(async (req) => {
 
   try {
     const { book_id } = await req.json();
-    if (!book_id) {
-      return new Response(JSON.stringify({ error: "book_id required" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    if (!isUuid(book_id)) {
+      return jsonResponse({ error: "valid book_id UUID required" }, 400);
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, serviceKey);
+    const { supabase, supabaseUrl, serviceKey } = createServiceClient();
+    const caller = await authenticateCaller(req, supabase, serviceKey);
+    if ("error" in caller) {
+      return jsonResponse({ error: caller.error }, caller.status);
+    }
 
     // Get book record
     const { data: book, error: bookErr } = await supabase
@@ -244,10 +244,12 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     if (bookErr || !book) {
-      return new Response(JSON.stringify({ error: "Book not found" }), {
-        status: 404,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return jsonResponse({ error: "Book not found" }, 404);
+    }
+
+    const forbidden = assertBookOwner(caller, book.user_id);
+    if (forbidden) {
+      return jsonResponse({ error: forbidden.error }, forbidden.status);
     }
 
     // Update processing step
@@ -260,10 +262,7 @@ Deno.serve(async (req) => {
 
     if (dlErr || !fileData) {
       await supabase.from("books").update({ status: "error", processing_step: "download_failed" }).eq("id", book_id);
-      return new Response(JSON.stringify({ error: "Failed to download file" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return jsonResponse({ error: "Failed to download file" }, 500);
     }
 
     const arrayBuffer = await fileData.arrayBuffer();
@@ -297,7 +296,7 @@ Deno.serve(async (req) => {
       book_id,
       title: ch.title.substring(0, 200),
       order: ch.order,
-      raw_text: ch.text,
+      raw_text: ch.text.slice(0, MAX_RAW_TEXT_CHARS),
       word_count: ch.text.split(/\s+/).filter(Boolean).length,
     }));
 
@@ -306,10 +305,7 @@ Deno.serve(async (req) => {
     if (chInsertErr) {
       console.error("Chapter insert error:", chInsertErr);
       await supabase.from("books").update({ status: "error", processing_step: "chapter_insert_failed" }).eq("id", book_id);
-      return new Response(JSON.stringify({ error: "Failed to save chapters" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return jsonResponse({ error: "Failed to save chapters" }, 500);
     }
 
     // Try to extract title from first line
@@ -328,37 +324,46 @@ Deno.serve(async (req) => {
       scene_count: chapters.length,
     }).eq("id", book_id);
 
-    // Auto-trigger analyze-book
-    try {
-      const analyzeUrl = `${supabaseUrl}/functions/v1/analyze-book`;
-      fetch(analyzeUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${serviceKey}`,
-        },
-        body: JSON.stringify({ book_id }),
-      }).catch((e) => console.error("Failed to trigger analyze-book:", e));
-      console.log("Triggered analyze-book for", book_id);
-    } catch (e) {
-      console.error("Error triggering analyze-book:", e);
-    }
+    // Do not await analyze-book: the AI job can exceed the parse-book time limit.
+    // Mark the book if the trigger request itself fails.
+    const incomingAuth = bearerToken(req);
+    const analyzeAuth = incomingAuth || serviceKey;
+    const analyzeUrl = `${supabaseUrl}/functions/v1/analyze-book`;
+    void fetch(analyzeUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${analyzeAuth}`,
+      },
+      body: JSON.stringify({ book_id }),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          console.error("analyze-book trigger failed:", res.status, await res.text());
+          await supabase.from("books").update({
+            status: "error",
+            processing_step: "analyze_trigger_failed",
+          }).eq("id", book_id);
+        }
+      })
+      .catch(async (e) => {
+        console.error("Error triggering analyze-book:", e);
+        await supabase.from("books").update({
+          status: "error",
+          processing_step: "analyze_trigger_failed",
+        }).eq("id", book_id);
+      });
+    console.log("Triggered analyze-book for", book_id);
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        chapters: chapters.length,
-        words: totalWords,
-        estimated_minutes: estimatedMinutes,
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return jsonResponse({
+      success: true,
+      chapters: chapters.length,
+      words: totalWords,
+      estimated_minutes: estimatedMinutes,
+    });
   } catch (err) {
     console.error("Parse error:", err);
-    return new Response(JSON.stringify({ error: String(err) }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return jsonResponse({ error: String(err) }, 500);
   }
 });
 

@@ -1,10 +1,7 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
-};
+import { assertBookOwner, authenticateCaller, createServiceClient } from "../_shared/auth.ts";
+import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
+import { isUuid } from "../_shared/ids.ts";
+import { fetchWithRetry } from "../_shared/retry.ts";
 
 const GENRES = [
   "fiction","non-fiction","business","history","science",
@@ -27,7 +24,7 @@ async function callAI(
   if (tools) body.tools = tools;
   if (toolChoice) body.tool_choice = toolChoice;
 
-  const res = await fetch(
+  const res = await fetchWithRetry(
     "https://ai.gateway.lovable.dev/v1/chat/completions",
     {
       method: "POST",
@@ -118,7 +115,15 @@ Write as if creating a compelling Netflix-style description.`,
 
   const call = result.choices?.[0]?.message?.tool_calls?.[0];
   if (!call) throw new Error("AI did not return tool call for analysis");
-  return JSON.parse(call.function.arguments);
+  try {
+    const parsed = JSON.parse(call.function.arguments);
+    if (!parsed || typeof parsed.synopsis !== "string" || typeof parsed.genre !== "string") {
+      throw new Error("invalid analysis shape");
+    }
+    return parsed;
+  } catch {
+    throw new Error("AI returned invalid analysis JSON");
+  }
 }
 
 // ── Step 2: Scene Plans per Chapter ───────────────────────────────────
@@ -229,7 +234,15 @@ ${truncated}`,
 
   const call = result.choices?.[0]?.message?.tool_calls?.[0];
   if (!call) throw new Error("AI did not return scene plans");
-  const parsed = JSON.parse(call.function.arguments);
+  let parsed: { scenes?: unknown[] };
+  try {
+    parsed = JSON.parse(call.function.arguments);
+  } catch {
+    throw new Error("AI returned invalid scene JSON");
+  }
+  if (!Array.isArray(parsed.scenes)) {
+    throw new Error("AI returned no scene list");
+  }
   return (parsed.scenes || []).map((s: any, i: number) => ({
     ...s,
     order: i,
@@ -246,21 +259,20 @@ Deno.serve(async (req) => {
 
   try {
     const { book_id } = await req.json();
-    if (!book_id) {
-      return new Response(JSON.stringify({ error: "book_id required" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    if (!isUuid(book_id)) {
+      return jsonResponse({ error: "valid book_id UUID required" }, 400);
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const { supabase, serviceKey } = createServiceClient();
+    const caller = await authenticateCaller(req, supabase, serviceKey);
+    if ("error" in caller) {
+      return jsonResponse({ error: caller.error }, caller.status);
+    }
+
     const apiKey = Deno.env.get("LOVABLE_API_KEY");
     if (!apiKey) {
       throw new Error("LOVABLE_API_KEY not configured");
     }
-
-    const supabase = createClient(supabaseUrl, serviceKey);
 
     // Get book
     const { data: book, error: bookErr } = await supabase
@@ -270,10 +282,12 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     if (bookErr || !book) {
-      return new Response(JSON.stringify({ error: "Book not found" }), {
-        status: 404,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return jsonResponse({ error: "Book not found" }, 404);
+    }
+
+    const forbidden = assertBookOwner(caller, book.user_id);
+    if (forbidden) {
+      return jsonResponse({ error: forbidden.error }, forbidden.status);
     }
 
     await supabase
@@ -286,20 +300,15 @@ Deno.serve(async (req) => {
       .from("chapters")
       .select("*")
       .eq("book_id", book_id)
-      .order("order");
+      .order("order")
+      .limit(200);
 
     if (chErr || !chapters || chapters.length === 0) {
       await supabase
         .from("books")
         .update({ status: "error", processing_step: "no_chapters" })
         .eq("id", book_id);
-      return new Response(
-        JSON.stringify({ error: "No chapters found for this book" }),
-        {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        },
-      );
+      return jsonResponse({ error: "No chapters found for this book" }, 400);
     }
 
     // ── Step 1: Analyze book (synopsis, genre, tags) ──
@@ -336,6 +345,7 @@ Deno.serve(async (req) => {
 
     let totalScenes = 0;
     let totalDuration = 0;
+    let failedChapters = 0;
 
     for (const chapter of chapters) {
       console.log(
@@ -367,6 +377,7 @@ Deno.serve(async (req) => {
             .from("scenes")
             .insert(sceneInserts);
           if (sErr) {
+            failedChapters += 1;
             console.error(
               `Scene insert error for chapter ${chapter.order}:`,
               sErr,
@@ -393,18 +404,25 @@ Deno.serve(async (req) => {
           })
           .eq("id", chapter.id);
       } catch (sceneErr) {
+        failedChapters += 1;
         console.error(
           `Error planning scenes for chapter ${chapter.order}:`,
           sceneErr,
         );
-        // Continue with other chapters
       }
 
       // Small delay between chapters to avoid rate limits
       await new Promise((r) => setTimeout(r, 1000));
     }
 
-    // ── Final update ──
+    if (totalScenes === 0) {
+      await supabase
+        .from("books")
+        .update({ status: "error", processing_step: "scene_planning_failed" })
+        .eq("id", book_id);
+      return jsonResponse({ error: "Failed to plan scenes for this book" }, 500);
+    }
+
     const runtimeMinutes = Math.max(1, Math.round(totalDuration / 60));
 
     await supabase
@@ -419,25 +437,20 @@ Deno.serve(async (req) => {
       .eq("id", book_id);
 
     console.log(
-      `Analysis complete: ${totalScenes} scenes, ${runtimeMinutes} min runtime`,
+      `Analysis complete: ${totalScenes} scenes, ${runtimeMinutes} min runtime, ${failedChapters} chapter failures`,
     );
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        synopsis: analysis.synopsis,
-        genre: analysis.genre,
-        tags: analysis.tags,
-        total_scenes: totalScenes,
-        runtime_minutes: runtimeMinutes,
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
+    return jsonResponse({
+      success: true,
+      synopsis: analysis.synopsis,
+      genre: analysis.genre,
+      tags: analysis.tags,
+      total_scenes: totalScenes,
+      runtime_minutes: runtimeMinutes,
+      failed_chapters: failedChapters,
+    });
   } catch (err) {
     console.error("Analyze error:", err);
-    return new Response(JSON.stringify({ error: String(err) }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return jsonResponse({ error: String(err) }, 500);
   }
 });

@@ -14,7 +14,7 @@ export const mockBooks: Book[] = [
     runtime_minutes: 68,
     episode_count: 1,
     progress_percent: 35,
-    created_at: "2026-02-01",
+    created_at: "2026-02-01T00:00:00.000Z",
     scene_count: 180,
   },
   {
@@ -29,7 +29,7 @@ export const mockBooks: Book[] = [
     backdrop_url: "https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=1920&h=1080&fit=crop",
     runtime_minutes: 52,
     episode_count: 1,
-    created_at: "2026-02-03",
+    created_at: "2026-02-03T00:00:00.000Z",
     scene_count: 140,
   },
   {
@@ -46,7 +46,7 @@ export const mockBooks: Book[] = [
     episode_count: 3,
     current_episode: 1,
     progress_percent: 12,
-    created_at: "2026-01-28",
+    created_at: "2026-01-28T00:00:00.000Z",
     scene_count: 270,
   },
   {
@@ -61,7 +61,7 @@ export const mockBooks: Book[] = [
     backdrop_url: "https://images.unsplash.com/photo-1524995997946-a1c2e315a42f?w=1920&h=1080&fit=crop",
     runtime_minutes: 78,
     episode_count: 2,
-    created_at: "2026-02-05",
+    created_at: "2026-02-05T00:00:00.000Z",
     scene_count: 210,
   },
   {
@@ -76,7 +76,7 @@ export const mockBooks: Book[] = [
     backdrop_url: "https://images.unsplash.com/photo-1519389950473-47ba0277781c?w=1920&h=1080&fit=crop",
     runtime_minutes: 28,
     episode_count: 1,
-    created_at: "2026-02-06",
+    created_at: "2026-02-06T00:00:00.000Z",
     scene_count: 75,
   },
   {
@@ -91,7 +91,7 @@ export const mockBooks: Book[] = [
     backdrop_url: "https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=1920&h=1080&fit=crop",
     runtime_minutes: 0,
     episode_count: 0,
-    created_at: "2026-02-08",
+    created_at: "2026-02-08T00:00:00.000Z",
     scene_count: 0,
   },
   {
@@ -106,7 +106,7 @@ export const mockBooks: Book[] = [
     backdrop_url: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=1920&h=1080&fit=crop",
     runtime_minutes: 65,
     episode_count: 2,
-    created_at: "2026-02-04",
+    created_at: "2026-02-04T00:00:00.000Z",
     scene_count: 195,
   },
   {
@@ -121,7 +121,7 @@ export const mockBooks: Book[] = [
     backdrop_url: "https://images.unsplash.com/photo-1509281373149-e957c6296406?w=1920&h=1080&fit=crop",
     runtime_minutes: 72,
     episode_count: 1,
-    created_at: "2026-01-30",
+    created_at: "2026-01-30T00:00:00.000Z",
     scene_count: 190,
   },
 ];
