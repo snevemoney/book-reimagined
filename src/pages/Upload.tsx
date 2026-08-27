@@ -87,9 +87,10 @@ const Upload = () => {
 
       toast({ title: "Book uploaded!", description: "Your book is being processed. Check the library for progress." });
       navigate("/");
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      toast({ title: "Upload failed", description: err.message || "Something went wrong", variant: "destructive" });
+      const message = err instanceof Error ? err.message : "Something went wrong";
+      toast({ title: "Upload failed", description: message, variant: "destructive" });
     } finally {
       setUploading(false);
       setProgress("");
